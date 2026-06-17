@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SERVER=hecto
+SERVER=deka
 LOCAL_DIR="$HOME/motion-editor"
 VENV_DIR="$LOCAL_DIR/.venv"
 REMOTE_MOTIONS="booster_assets/motions/K1"
@@ -68,6 +68,6 @@ echo "Launching motion editor..."
 
 if [[ "$SYNC_BACK" -eq 1 ]]; then
     echo "Syncing back to server..."
-    rsync -az "$MOTION" "$SERVER:~/$REMOTE_DIR/$(basename "$MOTION")"
-    rsync -az "$MOTION.bak" "$SERVER:~/$REMOTE_DIR/$(basename "$MOTION").bak" 2>/dev/null || true
+    rsync -az "$MOTION" "$SERVER:~/$REMOTE_MOTIONS/$(basename "$MOTION")"
+    rsync -az "$MOTION.bak" "$SERVER:~/$REMOTE_MOTIONS/$(basename "$MOTION").bak" 2>/dev/null || true
 fi
