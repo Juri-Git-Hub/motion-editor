@@ -23,10 +23,10 @@ pip install --editable .
 ## Usage
 
 ```bash
-./run.sh --robot booster_k1
+./run.sh
 ```
 
-Select a motion from the numbered list when prompted. The script syncs motion
+Select a motion from the numbered list when prompted. `booster_k1` is the default robot; pass `--robot` to change it. The script syncs motion
 files from a remote server, installs the package automatically into a local
 venv, and launches the editor.
 
