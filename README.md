@@ -23,6 +23,23 @@ pip install --editable .
 ## Usage
 
 ```bash
+./run.sh --robot booster_k1
+```
+
+Select a motion from the numbered list when prompted. The script syncs motion
+files from a remote server, installs the package automatically into a local
+venv, and launches the editor.
+
+| Flag            | Description                           |
+|-----------------|---------------------------------------|
+| `--server`      | Remote host to sync motions from      |
+| `--robot`       | Robot type (default: `booster_k1`)   |
+| `--sync-back`   | Sync edited motion back to server     |
+| `--no-sync`     | Skip motion file sync                 |
+
+You can also run the CLI directly:
+
+```bash
 motion-editor --robot booster_k1 --motion motions/k1_fight_001.npz
 ```
 
