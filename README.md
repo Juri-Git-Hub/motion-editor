@@ -6,7 +6,7 @@ GUI editor for retargeted robot motions. View, edit, and refine motion capture d
 
 - Python >= 3.10
 - [MuJoCo](https://github.com/google-deepmind/mujoco) (installed via pip)
-- A robot model XML (see [GMR assets](#gmr-assets))
+- A robot model XML (synced from server via `./run.sh`, see [Robot Assets](#robot-assets))
 
 ## Installation
 
@@ -44,7 +44,8 @@ motion-editor --robot booster_k1 --motion motions/k1_fight_001.npz
 ```
 
 If `--xml` is provided it takes precedence; otherwise the robot name is used to
-look up the XML in `~/GMR/` or the `GMR_ROOT` environment variable.
+look up the XML in `~/motion-editor/assets/robots/` (synced from server) with
+a fallback to `~/GMR/` or the `GMR_ROOT` environment variable.
 
 ### Controls
 
@@ -61,20 +62,22 @@ look up the XML in `~/GMR/` or the `GMR_ROOT` environment variable.
 | Scroll              | Zoom                          |
 | Right-click joint   | Reset joint to original       |
 
-### GMR Assets
+### Robot Assets
 
-Robot XML files are expected under `~/GMR/` structured as:
+Model XML/URDF files are synced from the remote server (`hecto`) into
+`~/motion-editor/assets/robots/`. The server layout is:
 
 ```
-~/GMR/assets/
-├── booster_k1/
-│   └── K1_serial.xml
-├── unitree_g1/
-│   └── g1_mocap_29dof.xml
+~/booster_assets/robots/
+├── K1/
+│   ├── K1_22dof.xml
+│   ├── K1_22dof.urdf
+│   └── meshes/
 └── ...
 ```
 
-Set `GMR_ROOT` to point elsewhere if your assets live in a different location.
+When `--no-sync` is used, or for robots not on the server, the editor falls
+back to `~/GMR/` (or `GMR_ROOT`).
 
 ## Project Structure
 

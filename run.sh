@@ -4,8 +4,10 @@ set -e
 SERVER=hecto
 LOCAL_DIR="$HOME/motion-editor"
 VENV_DIR="$LOCAL_DIR/.venv"
-REMOTE_DIR="booster_assets/motions/K1"
+REMOTE_MOTIONS="booster_assets/motions/K1"
+REMOTE_ROBOTS="booster_assets/robots"
 LOCAL_MOTIONS="$LOCAL_DIR/motions"
+LOCAL_ROBOTS="$LOCAL_DIR/assets/robots"
 SYNC_BACK=0
 NO_SYNC=0
 ROBOT="booster_k1"
@@ -22,8 +24,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$NO_SYNC" -eq 0 ]]; then
-    echo "Syncing motion files from $SERVER:~/$REMOTE_DIR/ ..."
-    rsync -az --info=progress2 "$SERVER:~/$REMOTE_DIR/" "$LOCAL_MOTIONS/"
+    echo "Syncing motion files from $SERVER:~/$REMOTE_MOTIONS/ ..."
+    rsync -az --info=progress2 "$SERVER:~/$REMOTE_MOTIONS/" "$LOCAL_MOTIONS/"
+    echo "Syncing robot assets from $SERVER:~/$REMOTE_ROBOTS/ ..."
+    rsync -az --info=progress2 "$SERVER:~/$REMOTE_ROBOTS/" "$LOCAL_ROBOTS/"
 fi
 
 mapfile -t FILES < <(ls -1t "$LOCAL_MOTIONS"/*.npz 2>/dev/null || true)

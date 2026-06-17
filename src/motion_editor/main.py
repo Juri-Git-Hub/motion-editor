@@ -11,7 +11,18 @@ import os
 import sys
 
 
+ROBOT_ASSETS_DIR = os.path.expanduser("~/motion-editor/assets/robots")
+
+
 def _resolve_xml(robot):
+    robot_assets = {
+        "booster_k1": "K1/K1_22dof.xml",
+    }
+    if robot in robot_assets:
+        path = os.path.join(ROBOT_ASSETS_DIR, robot_assets[robot])
+        if os.path.exists(path):
+            return path
+
     candidates = [
         os.path.expanduser("~/GMR"),
         "/home/jurek/GMR",
@@ -68,7 +79,7 @@ def main():
         xml_path = _resolve_xml(args.robot)
         if xml_path is None:
             print(f"Could not resolve XML for '{args.robot}'.")
-            print("Provide --xml or check ~/GMR exists.")
+            print("Provide --xml, or run ./run.sh to sync robot assets from server.")
             return 1
         print(f"XML: {xml_path}")
 
