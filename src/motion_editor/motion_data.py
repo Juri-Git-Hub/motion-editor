@@ -3,9 +3,12 @@ import pickle
 import shutil
 import numpy as np
 from pathlib import Path
-import datetime
+from scipy.spatial.transform import Rotation as R
 
 from .joint_info import NPZ_JOINT_NAMES, NPZ_BODY_NAMES
+
+# Cap on undo history entries; each entry deep-copies full joint/root arrays.
+MAX_HISTORY = 200
 
 
 class MotionData:
@@ -17,6 +20,8 @@ class MotionData:
         self._load(path)
         self._store_originals()
         self.dirty_frames = set()
+        if not hasattr(self, 'keyframes'):
+            self.keyframes = set()
         self.history = []
         self.history_pos = -1
         self.record_history("Loaded")
@@ -30,8 +35,8 @@ class MotionData:
     def _load_npz(self, path):
         d = np.load(path, allow_pickle=True)
         self.format = 'npz'
-        self.joint_names = list(d['joint_names'])
-        self.body_names = list(d['body_names'])
+        file_joint_names = [str(n) for n in d['joint_names']]
+        file_body_names = [str(n) for n in d['body_names']]
         self.fps = int(d['fps'].item()) if d['fps'].ndim == 0 else int(d['fps'][0])
         self.joint_pos = d['joint_pos'].astype(np.float64)
         self.joint_vel = d['joint_vel'].astype(np.float64)
@@ -39,8 +44,26 @@ class MotionData:
         self.body_quat_w = d['body_quat_w'].astype(np.float64)
         self.body_lin_vel_w = d['body_lin_vel_w'].astype(np.float64)
         self.body_ang_vel_w = d['body_ang_vel_w'].astype(np.float64)
+
+        # Some .npz files store joints/bodies in a different order than the
+        # canonical NPZ_JOINT_NAMES / NPZ_BODY_NAMES. The renderer, FK and save
+        # paths all index by the canonical order, so normalize column order on
+        # load. Without this, reordered files render with scrambled joints.
+        self.joint_names = self._normalize_columns(
+            file_joint_names, NPZ_JOINT_NAMES,
+            ['joint_pos', 'joint_vel'],
+        )
+        self.body_names = self._normalize_columns(
+            file_body_names, NPZ_BODY_NAMES,
+            ['body_pos_w', 'body_quat_w', 'body_lin_vel_w', 'body_ang_vel_w'],
+        )
+
         self.n_frames = len(self.joint_pos)
         self.n_joints = self.joint_pos.shape[1]
+
+        # Keyframes (anchor frames for interpolation), persisted if present.
+        if 'keyframes' in d:
+            self.keyframes = set(int(x) for x in d['keyframes'])
 
         # Root = trunk (first body, index 0)
         self.root_pos = self.body_pos_w[:, 0].copy()
@@ -49,7 +72,26 @@ class MotionData:
         # PKL compat alias
         self.dof_pos = self.joint_pos
 
+    def _normalize_columns(self, file_names, canonical_names, attrs):
+        """Reorder axis-1 columns of the given attrs from file order to canonical
+        order, matching by name. Returns the canonical name list on success, or
+        the original file order (arrays untouched) if any name is missing."""
+        if file_names == canonical_names:
+            return list(canonical_names)
+        missing = [n for n in canonical_names if n not in file_names]
+        if missing:
+            print(f"[motion_data] WARNING: {self.path} missing expected names "
+                  f"{missing}; leaving column order untouched.")
+            return list(file_names)
+        src_idx = [file_names.index(n) for n in canonical_names]
+        for attr in attrs:
+            setattr(self, attr, getattr(self, attr)[:, src_idx])
+        return list(canonical_names)
+
     def _load_pkl(self, path):
+        # SECURITY: pickle.load executes arbitrary code on a crafted file. Only
+        # load .pkl motions from trusted sources (your own server/rsync). For
+        # untrusted data prefer the .npz format.
         with open(path, 'rb') as f:
             raw = pickle.load(f)
         self.format = 'pkl'
@@ -134,6 +176,10 @@ class MotionData:
             self.root_pos.copy(),
             self.root_rot.copy(),
         ))
+        # Cap memory: drop oldest entries when over the limit.
+        if len(self.history) > MAX_HISTORY:
+            drop = len(self.history) - MAX_HISTORY
+            del self.history[:drop]
         self.history_pos = len(self.history) - 1
 
     def restore_history(self, pos):
@@ -196,7 +242,6 @@ class MotionData:
             self.joint_vel[f] = (self.joint_pos[f + 1] - self.joint_pos[f - 1]) / (2 * dt)
             self.body_lin_vel_w[f] = (self.body_pos_w[f + 1] - self.body_pos_w[f - 1]) / (2 * dt)
             # Angular velocity: approximate from quaternion difference
-            from scipy.spatial.transform import Rotation as R
             for b in range(len(NPZ_BODY_NAMES)):
                 q0 = self.body_quat_w[f - 1, b]  # wxyz
                 q1 = self.body_quat_w[f + 1, b]
@@ -229,7 +274,13 @@ class MotionData:
         self.body_pos_w[:, 0] = self.root_pos
         self.body_quat_w[:, 0] = self.root_rot
 
-        # Backup
+        # Backup the original source file once (output paths are versioned and
+        # never overwrite the source, so guarding only `path` left no backup at
+        # all). run.sh --sync-back expects "<source>.bak".
+        src_bak = self.path + '.bak'
+        if os.path.exists(self.path) and not os.path.exists(src_bak):
+            shutil.copy2(self.path, src_bak)
+        # Also back up the target if we are overwriting an existing file.
         if Path(path).exists():
             shutil.copy2(path, path + '.bak')
 
@@ -243,6 +294,7 @@ class MotionData:
             joint_names=np.array(NPZ_JOINT_NAMES, dtype=object),
             body_names=np.array(NPZ_BODY_NAMES, dtype=object),
             fps=np.array([self.fps], dtype=np.int64),
+            keyframes=np.array(sorted(self.keyframes), dtype=np.int64),
         )
         self.dirty_frames.clear()
         return path

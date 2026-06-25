@@ -11,7 +11,12 @@ import os
 import sys
 
 
-ROBOT_ASSETS_DIR = os.path.expanduser("~/motion-editor/assets/robots")
+# Local robot assets shipped with the repo (synced by run.sh). Override with
+# MOTION_EDITOR_ASSETS_DIR if assets live elsewhere.
+ROBOT_ASSETS_DIR = os.environ.get(
+    "MOTION_EDITOR_ASSETS_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "..", "assets", "robots"),
+)
 
 
 def _resolve_xml(robot):
@@ -23,10 +28,12 @@ def _resolve_xml(robot):
         if os.path.exists(path):
             return path
 
-    candidates = [
-        os.path.expanduser("~/GMR"),
-        "/home/jurek/GMR",
-    ]
+    # GMR fallback. Roots come from env (GMR_ROOT / ~/GMR); no hardcoded paths.
+    candidates = []
+    gmr_root = os.environ.get("GMR_ROOT")
+    if gmr_root:
+        candidates.append(gmr_root)
+    candidates.append(os.path.expanduser("~/GMR"))
 
     known = {
         "booster_k1": "assets/booster_k1/K1_serial.xml",
@@ -51,12 +58,6 @@ def _resolve_xml(robot):
         path = os.path.join(root, rel)
         if os.path.exists(path):
             return path
-
-    gmr_root = os.environ.get("GMR_ROOT")
-    if gmr_root:
-        path = os.path.join(gmr_root, rel)
-        if os.path.exists(path):
-            return path
     return None
 
 
@@ -70,6 +71,11 @@ def main():
                         help="MuJoCo XML path (overrides --robot lookup)")
     parser.add_argument("--motion", type=str, required=True,
                         help="Path to the motion file (.npz or .pkl)")
+    parser.add_argument("--ball", action="store_true",
+                        help="Add a physics ball to test pickup motions")
+    parser.add_argument("--ball-pos", type=float, nargs=3, default=[0.0, 0.0, 0.2],
+                        metavar=("X", "Y", "Z"),
+                        help="Ball center position (default: 0 0 0.2)")
 
     args = parser.parse_args()
 
@@ -101,7 +107,8 @@ def main():
     print("  Right-click joint → reset to original")
 
     from .editor import Editor
-    editor = Editor(xml_path=xml_path, motion_path=args.motion)
+    ball_pos = args.ball_pos if args.ball else None
+    editor = Editor(xml_path=xml_path, motion_path=args.motion, ball_pos=ball_pos)
     try:
         editor.run()
     except KeyboardInterrupt:

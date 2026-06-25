@@ -10,6 +10,8 @@ class CameraController:
         self.last_mouse_pos = (0, 0)
 
     def on_mouse_button(self, window, button, action, mods):
+        if button >= len(self.mouse_buttons):
+            return  # ignore extra buttons (4/5/...); list only tracks L/R/M
         self.mouse_buttons[button] = action == glfw.PRESS
         if action == glfw.PRESS:
             self.last_mouse_pos = glfw.get_cursor_pos(window)

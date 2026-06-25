@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
-SERVER=deka
-LOCAL_DIR="$HOME/motion-editor"
+# Repo root = dir of this script. Load optional config.env (gitignored).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/config.env" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/config.env"
+fi
+
+# Defaults (overridable via config.env or environment).
+SERVER="${SERVER:-deka}"
+LOCAL_DIR="${MOTION_EDITOR_DIR:-$SCRIPT_DIR}"
 VENV_DIR="$LOCAL_DIR/.venv"
-REMOTE_MOTIONS="booster_assets/motions/K1"
-REMOTE_ROBOTS="booster_assets/robots"
+REMOTE_MOTIONS="${REMOTE_MOTIONS:-bHumanKiller/booster_assets/motions/K1}"
+REMOTE_ROBOTS="${REMOTE_ROBOTS:-bHumanKiller/booster_assets/robots}"
 LOCAL_MOTIONS="$LOCAL_DIR/motions"
 LOCAL_ROBOTS="$LOCAL_DIR/assets/robots"
 SYNC_BACK=0
@@ -27,6 +35,7 @@ if [[ "$NO_SYNC" -eq 0 ]]; then
     echo "Syncing motion files from $SERVER:~/$REMOTE_MOTIONS/ ..."
     rsync -az --info=progress2 "$SERVER:~/$REMOTE_MOTIONS/" "$LOCAL_MOTIONS/"
     echo "Syncing robot assets from $SERVER:~/$REMOTE_ROBOTS/ ..."
+    mkdir -p "$LOCAL_ROBOTS"
     rsync -az --info=progress2 "$SERVER:~/$REMOTE_ROBOTS/" "$LOCAL_ROBOTS/"
 fi
 
@@ -48,6 +57,10 @@ else
     done
     read -rp "Select motion [1-${#FILES[@]}]: " SEL
     SEL="${SEL:-1}"
+    if ! [[ "$SEL" =~ ^[0-9]+$ ]] || (( SEL < 1 || SEL > ${#FILES[@]} )); then
+        echo "Error: invalid selection '$SEL' (expected 1-${#FILES[@]})"
+        exit 1
+    fi
     MOTION="${FILES[$((SEL-1))]}"
 fi
 
@@ -64,7 +77,8 @@ echo "Installing dependencies..."
 echo "Launching motion editor..."
 "$VENV_DIR/bin/python" -m motion_editor.main \
     --robot "$ROBOT" \
-    --motion "$MOTION"
+    --motion "$MOTION" \
+    --ball
 
 if [[ "$SYNC_BACK" -eq 1 ]]; then
     echo "Syncing back to server..."

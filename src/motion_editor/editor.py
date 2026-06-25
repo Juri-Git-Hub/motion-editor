@@ -27,11 +27,40 @@ from .ui.history_panel import draw_history
 
 
 class Editor:
-    def __init__(self, xml_path, motion_path):
-        # Load model
-        self.model = mj.MjModel.from_xml_path(str(xml_path))
+    def __init__(self, xml_path, motion_path, ball_pos=None):
+        # Load model (inject physics ball if requested)
+        if ball_pos is not None:
+            spec = mj.MjSpec.from_file(str(xml_path))
+            ball_body = spec.worldbody.add_body(name='ball', pos=list(ball_pos))
+            fj = ball_body.add_freejoint()
+            fj.name = 'ball_joint'
+            bg = ball_body.add_geom()
+            bg.name = 'ball_geom'
+            bg.type = mj.mjtGeom.mjGEOM_SPHERE
+            bg.size[0] = 0.1
+            bg.mass = 0.5
+            bg.rgba[:] = [1.0, 0.4, 0.0, 1.0]
+            self.model = spec.compile()
+            ball_jid = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_JOINT, 'ball_joint')
+            self.robot_nq = int(self.model.jnt_qposadr[ball_jid])
+            self.robot_nv = int(self.model.jnt_dofadr[ball_jid])
+            self.has_ball = True
+            self.ball_enabled = True
+            self.ball_radius = 0.1
+        else:
+            self.model = mj.MjModel.from_xml_path(str(xml_path))
+            self.robot_nq = self.model.nq
+            self.robot_nv = self.model.nv
+            self.has_ball = False
+            self.ball_enabled = False
+            self.ball_radius = 0.1
+
         self.data = mj.MjData(self.model)
         mj.mj_forward(self.model, self.data)
+
+        if self.has_ball:
+            self.ball_geom_id = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_GEOM, 'ball_geom')
+            self.ball_body_id = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_BODY, 'ball')
 
         # Build joint mappings
         self.joint_info = build_joint_info(self.model)
@@ -56,6 +85,13 @@ class Editor:
         self.copied_pose = None
         self.copied_root = None
 
+        # Keyframe drag (timeline): (old_frame, target_frame) while dragging.
+        self.kf_drag = None
+
+        # Timeline zoom: visible frame window [view_lo, view_hi] (floats).
+        self.view_lo = 0.0
+        self.view_hi = float(max(1, self.motion.n_frames - 1))
+
         # Tool params / interpolation range
         self.smooth_sigma = 3.0
         self.smooth_radius = 15
@@ -74,11 +110,24 @@ class Editor:
                 npz_range[name] = (info['limit_lo'], info['limit_hi'])
         eps = 1e-3
         for li, ri in self.symmetry_pairs:
-            lo_l, hi_l = npz_range.get(NPZ_JOINT_NAMES[li], (0, 0))
-            lo_r, hi_r = npz_range.get(NPZ_JOINT_NAMES[ri], (0, 0))
-            swapped = abs(hi_l + lo_r) < eps and abs(lo_l + hi_r) < eps
-            identical = abs(lo_l - lo_r) < eps and abs(hi_l - hi_r) < eps
-            sign = -1 if (swapped and not identical) else 1
+            # Mirror across the sagittal plane: Roll (fore-aft axis) and Yaw
+            # (vertical axis) joints flip sign, Pitch (lateral axis) keeps it.
+            # The joint limits are an unreliable signal — symmetric ranges like
+            # [-x, x] (common for Roll/Yaw) made the old range heuristic force
+            # sign=+1, so mirroring copied the value without flipping. Derive
+            # the sign from the joint name suffix instead.
+            name_l = NPZ_JOINT_NAMES[li].lower()
+            if name_l.endswith('_roll') or name_l.endswith('_yaw') or name_l.endswith('yaw'):
+                sign = -1
+            elif name_l.endswith('_pitch') or name_l.endswith('pitch'):
+                sign = 1
+            else:
+                # Fallback: infer from limits (mirrored ranges → flip).
+                lo_l, hi_l = npz_range.get(NPZ_JOINT_NAMES[li], (0, 0))
+                lo_r, hi_r = npz_range.get(NPZ_JOINT_NAMES[ri], (0, 0))
+                swapped = abs(hi_l + lo_r) < eps and abs(lo_l + hi_r) < eps
+                identical = abs(lo_l - lo_r) < eps and abs(hi_l - hi_r) < eps
+                sign = -1 if (swapped and not identical) else 1
             self.symmetry_links[li] = (ri, sign)
             self.symmetry_links[ri] = (li, sign)
 
@@ -94,18 +143,96 @@ class Editor:
             self.npz_to_qpos, self.npz_body_map,
         )
 
+        # Ground lock: when enabled, shift root Z after edits so the lower
+        # foot's lowest point rests on the floor (z=0). Kinematic playback has
+        # no real gravity, so this is what keeps edited feet on the ground.
+        self.ground_lock_enabled = False
+        self._build_foot_geoms()
+
         # Camera
         self.camera = CameraController(self.renderer.cam)
 
         # Register callbacks after camera exists
         glfw.set_mouse_button_callback(self.window, self.camera.on_mouse_button)
         glfw.set_cursor_pos_callback(self.window, self.camera.on_cursor_pos)
-        glfw.set_scroll_callback(self.window, self.camera.on_scroll)
+        glfw.set_scroll_callback(self.window, self._on_scroll)
         glfw.set_key_callback(self.window, self._on_key)
         glfw.set_window_size_callback(self.window, self._on_resize)
 
         # Apply frame 0
         self.renderer.apply_frame(self.motion, 0)
+
+    def _build_foot_geoms(self):
+        """Cache foot geoms and their local corner/vertex points for fast
+        lowest-point queries during ground lock."""
+        self._foot_geoms = []  # list of (geom_id, local_points Nx3)
+        box_corners = np.array(
+            [[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)],
+            dtype=np.float64,
+        )
+        foot_bodies = ['left_foot_link', 'right_foot_link']
+        foot_bids = set()
+        for b in foot_bodies:
+            bid = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_BODY, b)
+            if bid >= 0:
+                foot_bids.add(bid)
+        for g in range(self.model.ngeom):
+            if self.model.geom_bodyid[g] not in foot_bids:
+                continue
+            gtype = int(self.model.geom_type[g])
+            if gtype == int(mj.mjtGeom.mjGEOM_MESH):
+                mid = self.model.geom_dataid[g]
+                a = self.model.mesh_vertadr[mid]
+                n = self.model.mesh_vertnum[mid]
+                pts = np.asarray(self.model.mesh_vert[a:a + n], dtype=np.float64)
+            elif gtype == int(mj.mjtGeom.mjGEOM_BOX):
+                pts = box_corners * self.model.geom_size[g]
+            else:
+                continue
+            self._foot_geoms.append((g, pts))
+
+    def _lowest_foot_z(self):
+        """Min world z over all foot geom points. Assumes mj_forward ran."""
+        zmin = np.inf
+        for g, pts in self._foot_geoms:
+            R = self.data.geom_xmat[g].reshape(3, 3)
+            world = self.data.geom_xpos[g] + pts @ R.T
+            zmin = min(zmin, float(world[:, 2].min()))
+        return zmin if np.isfinite(zmin) else None
+
+    def lock_ground(self, frame):
+        """Shift root Z at `frame` so the lower foot sits on the floor (z=0)."""
+        if not self._foot_geoms:
+            return
+        f = int(frame)
+        # FK current pose into self.data, measure, then correct root height.
+        self.renderer.apply_frame(self.motion, f)
+        z = self._lowest_foot_z()
+        if z is not None and abs(z) > 1e-9:
+            self.motion.root_pos[f, 2] -= z
+            self.motion.dirty_frames.add(f)
+
+    def lock_ground_range(self, start, end):
+        """Ground-lock every frame in [start, end] as one undoable action."""
+        if not self._foot_geoms:
+            return
+        lo, hi = sorted((int(start), int(end)))
+        lo = max(0, lo)
+        hi = min(self.motion.n_frames - 1, hi)
+        if hi < lo:
+            return
+        self.motion.record_history(f"Ground lock {lo}-{hi}")
+        for f in range(lo, hi + 1):
+            self.lock_ground(f)
+        self.renderer.apply_frame(self.motion, self.frame_idx)
+        print(f"Ground locked frames {lo}-{hi}")
+
+    def commit_frame(self, frame):
+        """Apply ground lock (if enabled) then render the frame. Edit handlers
+        call this instead of renderer.apply_frame so edits keep feet grounded."""
+        if self.ground_lock_enabled:
+            self.lock_ground(frame)
+        self.renderer.apply_frame(self.motion, frame)
 
     def _init_window(self):
         if not glfw.init():
@@ -139,6 +266,13 @@ class Editor:
         style.colors[imgui.COLOR_TITLE_BACKGROUND_ACTIVE] = (0.22, 0.22, 0.25, 1.0)
 
     def _on_key(self, window, key, scancode, action, mods):
+        # This callback replaced imgui's GLFW key callback, so forward events to
+        # imgui first — otherwise text inputs never see Enter/Backspace/nav keys.
+        self.impl.keyboard_callback(window, key, scancode, action, mods)
+        # When a text field (e.g. joint numeric entry) is focused, let imgui own
+        # the keyboard and skip editor shortcuts.
+        if imgui.get_io().want_capture_keyboard:
+            return
         if action != glfw.PRESS:
             return
         if mods & glfw.MOD_CONTROL and key == glfw.KEY_S:
@@ -165,6 +299,14 @@ class Editor:
         elif key == glfw.KEY_ESCAPE:
             glfw.set_window_should_close(self.window, True)
 
+    def _on_scroll(self, window, x_offset, y_offset):
+        # This callback replaced imgui's GLFW scroll callback, so forward the
+        # wheel to imgui first (it can't poll wheel events) — otherwise
+        # io.mouse_wheel stays 0 and timeline zoom never fires. Camera.on_scroll
+        # ignores scroll when imgui wants the mouse, so the two don't fight.
+        self.impl.scroll_callback(window, x_offset, y_offset)
+        self.camera.on_scroll(window, x_offset, y_offset)
+
     def _on_resize(self, window, w, h):
         self.window_size = (w, h)
 
@@ -185,6 +327,15 @@ class Editor:
                         self.playing = False
                 idx = int(round(self.frame_idx))
                 self.renderer.apply_frame(self.motion, idx)
+
+                if self.ball_enabled:
+                    robot_qpos = self.data.qpos[:self.robot_nq].copy()
+                    for _ in range(16):
+                        self.data.qpos[:self.robot_nq] = robot_qpos
+                        self.data.qvel[:self.robot_nv] = 0.0
+                        mj.mj_step(self.model, self.data)
+                    self.data.qpos[:self.robot_nq] = robot_qpos
+                    mj.mj_forward(self.model, self.data)
 
             imgui.new_frame()
 

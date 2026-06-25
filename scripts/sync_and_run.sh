@@ -26,11 +26,18 @@ set -e
 
 # ── Config ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOCAL_DIR="$HOME/motion-editor"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Load optional config.env (gitignored) from repo root.
+if [[ -f "$REPO_DIR/config.env" ]]; then
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/config.env"
+fi
+
+LOCAL_DIR="${MOTION_EDITOR_DIR:-$REPO_DIR}"
 LOCAL_MOTIONS="$LOCAL_DIR/motions"
 
-# Remote defaults
-REMOTE_MOTIONS_DIR="booster_assets/motions/K1"
+# Remote defaults (overridable via config.env or environment).
+REMOTE_MOTIONS_DIR="${REMOTE_MOTIONS_DIR:-booster_assets/motions/K1}"
 SERVER="${SERVER:-}"
 SYNC_BACK=0
 NO_SYNC=0
@@ -63,11 +70,14 @@ fi
 # ── Sync code + motions from server ────────────────────────────────────────
 if [[ "$NO_SYNC" -eq 0 ]]; then
     echo "═══ Syncing motion-editor from $SERVER ═══"
-    rsync -az --delete --info=progress2 "$SERVER:~/motion-editor/" "$LOCAL_DIR/"
+    # No --delete: it would wipe local-only files (output/, .venv/, edits).
+    rsync -az --info=progress2 \
+        --exclude '.venv/' --exclude 'output/' --exclude 'motions/' --exclude 'config.env' \
+        "$SERVER:~/motion-editor/" "$LOCAL_DIR/"
 
     echo "═══ Syncing motions from $SERVER:$REMOTE_MOTIONS_DIR ═══"
     mkdir -p "$LOCAL_MOTIONS"
-    rsync -az --delete --info=progress2 "$SERVER:~/$REMOTE_MOTIONS_DIR/" "$LOCAL_MOTIONS/"
+    rsync -az --info=progress2 "$SERVER:~/$REMOTE_MOTIONS_DIR/" "$LOCAL_MOTIONS/"
 
     # Also sync GMR outputs if they exist
     if rsync -az --dry-run "$SERVER:~/GMR/outputs/" /tmp/ 2>/dev/null | grep -q .; then
