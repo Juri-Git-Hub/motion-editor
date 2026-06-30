@@ -161,6 +161,17 @@ def draw_timeline(editor):
         if xe > xs:
             draw.add_rect_filled(xs, rect_min.y - 4, xe, rect_max.y + 4, col)
 
+        # Self-collision ticks (red lane just below the scrub bar).
+        cf = getattr(editor, "collision_frames", None)
+        if cf is not None:
+            col_col = imgui.get_color_u32_rgba(0.95, 0.2, 0.2, 0.9)
+            for f in range(len(cf)):
+                if not cf[f] or not (0 <= f <= n):
+                    continue
+                xc = _f2x(editor, f, x0, x1)
+                if x0 <= xc <= x1:
+                    draw.add_rect_filled(xc - 1.0, rect_min.y - 9, xc + 1.0, rect_min.y - 6, col_col)
+
         # Keyframe ticks.
         kf_col = imgui.get_color_u32_rgba(1.0, 0.85, 0.2, 1.0)
         for kf in m.keyframes:

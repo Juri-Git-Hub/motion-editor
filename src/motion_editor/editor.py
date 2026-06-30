@@ -24,6 +24,7 @@ from .ui.root_editor import draw_root_editor
 from .ui.tools import draw_tools
 from .ui.status_bar import draw_status_bar
 from .ui.history_panel import draw_history
+from .ui.collision_panel import draw_collision_panel
 
 
 class Editor:
@@ -159,6 +160,12 @@ class Editor:
         glfw.set_key_callback(self.window, self._on_key)
         glfw.set_window_size_callback(self.window, self._on_resize)
 
+        # Per-frame self-collision flags for timeline markers. Computed on a
+        # scratch MjData so the live pose in self.data is never disturbed.
+        self._coll_data = mj.MjData(self.model)
+        self.collision_frames = np.zeros(self.motion.n_frames, dtype=bool)
+        self.recompute_collisions()
+
         # Apply frame 0
         self.renderer.apply_frame(self.motion, 0)
 
@@ -233,6 +240,20 @@ class Editor:
         if self.ground_lock_enabled:
             self.lock_ground(frame)
         self.renderer.apply_frame(self.motion, frame)
+        self.recompute_collisions((int(frame),))
+
+    def recompute_collisions(self, frames=None):
+        """Update self.collision_frames for the given frames (all if None) using
+        a scratch MjData, leaving the live display pose untouched."""
+        if frames is None:
+            frames = range(self.motion.n_frames)
+        det = self.renderer.detector
+        for f in frames:
+            if not (0 <= f < self.motion.n_frames):
+                continue
+            self.renderer._write_qpos(self._coll_data, self.motion, f)
+            mj.mj_forward(self.model, self._coll_data)
+            self.collision_frames[f] = det.any_collision(self._coll_data)
 
     def _init_window(self):
         if not glfw.init():
@@ -281,10 +302,12 @@ class Editor:
         elif mods & glfw.MOD_CONTROL and key == glfw.KEY_Z:
             if self.motion.history_pos > 0:
                 self.motion.restore_history(self.motion.history_pos - 1)
+                self.recompute_collisions()
                 self.renderer.apply_frame(self.motion, self.frame_idx)
         elif mods & glfw.MOD_CONTROL and key == glfw.KEY_Y:
             if self.motion.history_pos < len(self.motion.history) - 1:
                 self.motion.restore_history(self.motion.history_pos + 1)
+                self.recompute_collisions()
                 self.renderer.apply_frame(self.motion, self.frame_idx)
         elif key == glfw.KEY_SPACE:
             self.playing = not self.playing
@@ -344,6 +367,7 @@ class Editor:
             draw_root_editor(self)
             draw_tools(self)
             draw_history(self)
+            draw_collision_panel(self)
             draw_status_bar(self)
 
             fb_w, fb_h = glfw.get_framebuffer_size(self.window)
