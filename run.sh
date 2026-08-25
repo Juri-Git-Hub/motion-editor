@@ -17,21 +17,21 @@ REMOTE_ROBOTS="${REMOTE_ROBOTS:-bHumanKiller/booster_assets/robots}"
 LOCAL_MOTIONS="$LOCAL_DIR/motions"
 LOCAL_ROBOTS="$LOCAL_DIR/assets/robots"
 SYNC_BACK=0
-NO_SYNC=0
+SYNC=0
 ROBOT="booster_k1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --server)      SERVER="$2";      shift 2 ;;
         --robot)       ROBOT="$2";       shift 2 ;;
+        --sync)        SYNC=1;           shift   ;;
         --sync-back)   SYNC_BACK=1;      shift   ;;
-        --no-sync)     NO_SYNC=1;        shift   ;;
         -h|--help)     head -40 "$0";    exit 0   ;;
         *) echo "Unknown: $1"; exit 1 ;;
     esac
 done
 
-if [[ "$NO_SYNC" -eq 0 ]]; then
+if [[ "$SYNC" -eq 1 ]]; then
     echo "Syncing motion files from $SERVER:~/$REMOTE_MOTIONS/ ..."
     rsync -az --info=progress2 "$SERVER:~/$REMOTE_MOTIONS/" "$LOCAL_MOTIONS/"
     echo "Syncing robot assets from $SERVER:~/$REMOTE_ROBOTS/ ..."
