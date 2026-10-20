@@ -241,13 +241,17 @@ class MotionData:
         for f in range(1, n - 1):
             self.joint_vel[f] = (self.joint_pos[f + 1] - self.joint_pos[f - 1]) / (2 * dt)
             self.body_lin_vel_w[f] = (self.body_pos_w[f + 1] - self.body_pos_w[f - 1]) / (2 * dt)
-            # Angular velocity: approximate from quaternion difference
+            # Angular velocity: finite-difference of the orientation. The key
+            # body_ang_vel_w is WORLD frame everywhere downstream (rl_core
+            # passes it through, rewards and the benchmark reset read it as
+            # world), so use the world-frame product r1 * r0.inv() — the
+            # legacy body-frame form r0.inv() * r1 silently stored body ω.
             for b in range(len(NPZ_BODY_NAMES)):
                 q0 = self.body_quat_w[f - 1, b]  # wxyz
                 q1 = self.body_quat_w[f + 1, b]
                 r0 = R.from_quat([q0[1], q0[2], q0[3], q0[0]])
                 r1 = R.from_quat([q1[1], q1[2], q1[3], q1[0]])
-                rel = r0.inv() * r1
+                rel = r1 * r0.inv()
                 rotvec = rel.as_rotvec()
                 self.body_ang_vel_w[f, b] = rotvec / (2 * dt)
 
@@ -291,10 +295,11 @@ class MotionData:
             body_quat_w=self.body_quat_w.astype(np.float32),
             body_lin_vel_w=self.body_lin_vel_w.astype(np.float32),
             body_ang_vel_w=self.body_ang_vel_w.astype(np.float32),
-            joint_names=np.array(NPZ_JOINT_NAMES, dtype=object),
-            body_names=np.array(NPZ_BODY_NAMES, dtype=object),
+            joint_names=np.array(NPZ_JOINT_NAMES),
+            body_names=np.array(NPZ_BODY_NAMES),
             fps=np.array([self.fps], dtype=np.int64),
             keyframes=np.array(sorted(self.keyframes), dtype=np.int64),
+            ang_vel_frame=np.str_("world"),
         )
         self.dirty_frames.clear()
         return path
